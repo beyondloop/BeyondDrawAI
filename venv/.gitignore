@@ -1,0 +1,15 @@
+# Python virtual environment files
+/Include/
+/Lib/
+/Scripts/
+/pyvenv.cfg
+
+# Python runtime and local data
+backend/.env
+backend/uploads/
+backend/**/__pycache__/
+*.py[cod]
+
+# Frontend generated files
+frontend/node_modules/
+frontend/dist/
