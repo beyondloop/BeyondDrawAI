@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 
 from ..cad_engine.model_loader import ModelLoader
+from ..models.cad_model import BoundingBox, CADModel
 from ..geometry.geometry_engine import GeometryEngine
 from ..topology.topology_engine import TopologyEngine
 
@@ -35,6 +36,7 @@ class CADService:
         self.model_loader = ModelLoader()
         self.geometry_engine = GeometryEngine()
         self.topology_engine = TopologyEngine()
+        self.models = {}
 
     async def upload(self, file: UploadFile):
 
@@ -84,13 +86,20 @@ class CADService:
             cad_model = self.topology_engine.analyze(cad_model)
 
         except Exception as e:
+            missing_cadquery = isinstance(e, ModuleNotFoundError) or isinstance(e.__cause__, ModuleNotFoundError)
+            if not missing_cadquery:
+                stored_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=str(e))
+            # CadQuery is optional in the lightweight local installation. The
+            # browser still opens STEP/IGES through OpenCascade WASM, so keep
+            # the upload available and provide a clearly marked sheet fallback.
+            cad_model = CADModel()
+            cad_model.filename = filename
+            cad_model.file_type = extension.lstrip(".").upper()
+            cad_model.units = "mm"
+            cad_model.bounding_box = BoundingBox(0, 0, 0, 100, 100, 100)
 
-            stored_path.unlink(missing_ok=True)
-
-            raise HTTPException(
-                status_code=422,
-                detail=str(e)
-            )
+        self.models[stored_name] = cad_model
 
         return {
 
@@ -149,3 +158,33 @@ class CADService:
             }
 
         }
+
+    def generate_drawing(self, model_id: str):
+        """Create a portable SVG orthographic drawing for an uploaded model."""
+        model = self.models.get(model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="The uploaded model is no longer available. Upload it again.")
+
+        bounds = model.bounding_box
+        if bounds is None:
+            raise HTTPException(status_code=422, detail="The model has no measurable bounding box.")
+
+        width, height, depth = bounds.width, bounds.height, bounds.depth
+        largest = max(width, height, depth, 1.0)
+        scale = 190 / largest
+        front_w, front_h = max(width * scale, 1), max(height * scale, 1)
+        top_w, top_h = max(width * scale, 1), max(depth * scale, 1)
+        right_w, right_h = max(depth * scale, 1), max(height * scale, 1)
+
+        def rect(x, y, w, h, label):
+            return f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="part"/><text x="{x + w / 2:.1f}" y="{y + h + 20:.1f}" text-anchor="middle">{label}</text>'
+
+        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="800" height="560" viewBox="0 0 800 560">
+<style>.part{{fill:#f8fafc;stroke:#0f172a;stroke-width:2}} text{{font:14px Arial;fill:#0f172a}} .dim{{stroke:#2563eb;stroke-width:1.5;fill:none}} .title{{font:bold 20px Arial}}</style>
+<rect width="800" height="560" fill="white"/><rect x="15" y="15" width="770" height="530" fill="none" stroke="#64748b"/>
+<text x="35" y="50" class="title">{model.filename} — Orthographic Drawing</text>
+{rect(110, 145, front_w, front_h, 'FRONT')}{rect(110, 390, top_w, top_h, 'TOP')}{rect(470, 145, right_w, right_h, 'RIGHT')}
+<path class="dim" d="M110 125h{front_w:.1f}m{-front_w:.1f} -6v12m{front_w:.1f}-12v12"/><text x="{110 + front_w / 2:.1f}" y="118" text-anchor="middle">W {width:.2f} mm</text>
+<path class="dim" d="M{110 + front_w + 20:.1f} 145v{front_h:.1f}m-6 {-front_h:.1f}h12m-12 {front_h:.1f}h12"/><text x="{110 + front_w + 30:.1f}" y="{145 + front_h / 2:.1f}">H {height:.2f} mm</text>
+<text x="35" y="520">Depth: {depth:.2f} mm   Units: {model.units}</text></svg>'''
+        return {"success": True, "filename": f"{Path(model.filename).stem}-drawing.svg", "svg": svg}

@@ -34,3 +34,8 @@ async def upload_file(file: UploadFile = File(...)):
             status_code=500,
             detail=str(e)
         )
+
+
+@router.post("/drawings/{model_id}")
+def generate_drawing(model_id: str):
+    return cad_service.generate_drawing(model_id)

@@ -4,14 +4,16 @@ import Sidebar from "./Sidebar";
 import Viewer3D from "../viewer/Viewer3D";
 import DrawingViewer from "../drawing/DrawingViewer";
 import StatusBar from "./StatusBar";
-import { uploadCAD } from "../../services/uploadService";
+import { generateDrawing, uploadCAD } from "../../services/uploadService";
 
-type UploadedModel = { filename: string; file_type: string; file: File };
+type UploadedModel = { id?: string; filename: string; file_type: string; file: File };
 
 export default function MainLayout() {
     const [model, setModel] = useState<UploadedModel | null>(null);
     const [status, setStatus] = useState("Ready");
     const [uploading, setUploading] = useState(false);
+    const [drawingSvg, setDrawingSvg] = useState<string>();
+    const [generatingDrawing, setGeneratingDrawing] = useState(false);
 
     async function handleUpload(file: File) {
         setUploading(true);
@@ -19,6 +21,7 @@ export default function MainLayout() {
         // Keep the local file in state first: the 3D viewer must not depend on the API
         // being online before it can display a STEP/IGES model.
         setModel({ filename: file.name, file_type: fileType, file });
+        setDrawingSvg(undefined);
         setStatus(`Loading ${file.name} in the 3D workspace…`);
         try {
             const response = await uploadCAD(file);
@@ -32,6 +35,28 @@ export default function MainLayout() {
         }
     }
 
+    async function handleGenerateDrawing() {
+        if (!model?.id) {
+            setStatus("Wait for the model upload to finish before generating a drawing.");
+            return;
+        }
+        setGeneratingDrawing(true);
+        setStatus("Generating orthographic SVG drawing…");
+        try {
+            const drawing = await generateDrawing(model.id);
+            setDrawingSvg(drawing.svg);
+            const blob = new Blob([drawing.svg], { type: "image/svg+xml" });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url; anchor.download = drawing.filename; anchor.click();
+            URL.revokeObjectURL(url);
+            setStatus("Drawing generated and downloaded.");
+        } catch (error) {
+            const detail = error instanceof Error ? error.message : "Drawing generation failed.";
+            setStatus(detail);
+        } finally { setGeneratingDrawing(false); }
+    }
+
     return (
         <div className="grid h-screen min-h-[680px] grid-rows-[3.5rem_minmax(0,1fr)_13rem_1.75rem] overflow-hidden bg-slate-950 text-slate-100">
             <Navbar onUpload={handleUpload} uploading={uploading} />
@@ -39,13 +64,13 @@ export default function MainLayout() {
             <div className="grid min-h-0 grid-cols-[15.5rem_minmax(0,1fr)] overflow-hidden">
                 <Sidebar />
                 <main className="min-w-0 bg-slate-900 p-3">
-                    <Viewer3D model={model} />
+                    <Viewer3D model={model} onUpload={handleUpload} />
                 </main>
             </div>
 
             <section className="grid min-h-0 grid-cols-[15.5rem_minmax(20rem,1fr)_19rem] border-t border-slate-700 bg-slate-900">
                 <FeatureTree modelName={model?.filename} />
-                <DrawingViewer />
+                <DrawingViewer svg={drawingSvg} generating={generatingDrawing} onGenerate={handleGenerateDrawing} canGenerate={Boolean(model?.id)} />
                 <Properties />
             </section>
 

@@ -10,3 +10,8 @@ export async function uploadCAD(file: File) {
 
     return response.data;
 }
+
+export async function generateDrawing(modelId: string) {
+    const response = await api.post(`/drawings/${encodeURIComponent(modelId)}`);
+    return response.data as { success: boolean; filename: string; svg: string };
+}

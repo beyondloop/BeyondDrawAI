@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { Box3, BufferAttribute, BufferGeometry, Color, Group, Mesh, MeshStandardMaterial, Vector3 } from "three";
+import occtimportjs from "occt-import-js";
 import occtWasmUrl from "occt-import-js/dist/occt-import-js.wasm?url";
 
 type UploadedModel = { filename: string; file_type: string; file: File };
@@ -45,7 +46,7 @@ function buildModel(result: any): Group {
     return group;
 }
 
-export default function Viewer3D({ model }: { model: UploadedModel | null }) {
+export default function Viewer3D({ model, onUpload }: { model: UploadedModel | null; onUpload: (file: File) => void }) {
     const [object, setObject] = useState<Group | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -72,10 +73,7 @@ export default function Viewer3D({ model }: { model: UploadedModel | null }) {
             setLoading(true);
             setError(null);
             try {
-                const [{ default: occtimportjs }, buffer] = await Promise.all([
-                    import("occt-import-js"),
-                    sourceModel.file.arrayBuffer(),
-                ]);
+                const buffer = await sourceModel.file.arrayBuffer();
                 const occt = await occtimportjs({ locateFile: () => occtWasmUrl });
                 const result = extension === "step" || extension === "stp"
                     ? occt.ReadStepFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.1 })
@@ -94,7 +92,15 @@ export default function Viewer3D({ model }: { model: UploadedModel | null }) {
     }, [model]);
 
     return (
-        <section className="relative h-full overflow-hidden rounded border border-slate-700 bg-slate-900">
+        <section
+            className="relative h-full overflow-hidden rounded border border-slate-700 bg-slate-900"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+                event.preventDefault();
+                const file = event.dataTransfer.files[0];
+                if (file) onUpload(file);
+            }}
+        >
             <div className="absolute inset-x-0 top-0 z-10 flex h-9 items-center justify-between border-b border-slate-700 bg-slate-900/90 px-3 text-xs text-slate-400">
                 <span className="font-medium text-slate-200">3D Viewer</span><div className="flex gap-3"><span>Perspective</span><span>Shaded</span></div>
             </div>
@@ -104,7 +110,7 @@ export default function Viewer3D({ model }: { model: UploadedModel | null }) {
             <div className="h-full pt-9">
                 {object ? <CadScene object={object} /> : <div className="flex h-full items-center justify-center text-center"><div>
                     <p className="text-sm text-slate-300">{loading ? "Converting CAD geometry…" : model?.filename ?? "3D workspace"}</p>
-                    <p className="mt-1 max-w-sm text-xs text-slate-500">{error ?? (model ? "Preparing 3D preview…" : "Upload a STEP or IGES model to begin editing")}</p>
+                    <p className="mt-1 max-w-sm text-xs text-slate-500">{error ?? (model ? "Preparing 3D preview…" : "Drop a STEP/STP or IGES/IGS file here, or use the upload button above")}</p>
                 </div></div>}
             </div>
         </section>
