@@ -1,21 +1,28 @@
 import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
-import { Box3, BufferAttribute, BufferGeometry, Color, Group, Mesh, MeshStandardMaterial, Vector3 } from "three";
+import { TrackballControls } from "@react-three/drei";
+import { Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, MeshStandardMaterial, SRGBColorSpace, Vector3 } from "three";
 import occtimportjs from "occt-import-js";
 import occtWasmUrl from "occt-import-js/dist/occt-import-js.wasm?url";
 
 type UploadedModel = { filename: string; file_type: string; file: File };
+export type CameraView = "isometric" | "top" | "front" | "right";
 
-function CadScene({ object }: { object: Group }) {
+function CadScene({ object, view }: { object: Group; view: CameraView }) {
+    const cameraPosition: Record<CameraView, [number, number, number]> = {
+        isometric: [4, 4, 4],
+        top: [0, 6, 0],
+        front: [0, 0, 6],
+        right: [6, 0, 0],
+    };
     return (
-        <Canvas camera={{ position: [4, 4, 4], fov: 40 }} dpr={[1, 2]}>
+        <Canvas key={view} camera={{ position: cameraPosition[view], fov: 40 }} dpr={[1, 2]}>
             <color attach="background" args={["#172033"]} />
             <ambientLight intensity={0.75} />
             <directionalLight position={[5, 8, 5]} intensity={1.8} />
             <gridHelper args={[10, 20, "#64748b", "#334155"]} />
             <primitive object={object} />
-            <OrbitControls makeDefault />
+            <TrackballControls makeDefault rotateSpeed={3} dynamicDampingFactor={0.12} />
         </Canvas>
     );
 }
@@ -31,8 +38,22 @@ function buildModel(result: any): Group {
             geometry.computeVertexNormals();
         }
         geometry.setIndex(new BufferAttribute(new Uint32Array(source.index.array), 1));
-        const [red = 0.35, green = 0.68, blue = 0.95] = source.color ?? [];
-        const mesh = new Mesh(geometry, new MeshStandardMaterial({ color: new Color(red, green, blue), metalness: 0.15, roughness: 0.55 }));
+        const makeMaterial = (color?: number[] | null) => {
+            const [red = 0.35, green = 0.68, blue = 0.95] = color ?? source.color ?? [];
+            return new MeshStandardMaterial({
+            // CAD colours are encoded as sRGB values between 0 and 1.
+            color: new Color().setRGB(red, green, blue, SRGBColorSpace),
+            metalness: 0.1,
+            roughness: 0.38,
+            side: DoubleSide,
+            });
+        };
+        const materials = [makeMaterial(source.color)];
+        for (const face of source.brep_faces ?? []) {
+            const materialIndex = face.color ? materials.push(makeMaterial(face.color)) - 1 : 0;
+            geometry.addGroup(face.first * 3, (face.last - face.first + 1) * 3, materialIndex);
+        }
+        const mesh = new Mesh(geometry, materials);
         mesh.name = source.name ?? "CAD mesh";
         group.add(mesh);
     }
@@ -41,12 +62,16 @@ function buildModel(result: any): Group {
     const center = bounds.getCenter(new Vector3());
     const size = bounds.getSize(new Vector3());
     const largestDimension = Math.max(size.x, size.y, size.z);
-    group.position.sub(center);
-    if (largestDimension > 0) group.scale.setScalar(3 / largestDimension);
+    // Keep the model's geometric centre exactly at the scene origin (0, 0, 0).
+    // The translation must account for the fit-to-view scale; otherwise scaling
+    // would move the centre away from the origin.
+    const scale = largestDimension > 0 ? 3 / largestDimension : 1;
+    group.scale.setScalar(scale);
+    group.position.copy(center).multiplyScalar(-scale);
     return group;
 }
 
-export default function Viewer3D({ model, onUpload }: { model: UploadedModel | null; onUpload: (file: File) => void }) {
+export default function Viewer3D({ model, onUpload, view }: { model: UploadedModel | null; onUpload: (file: File) => void; view: CameraView }) {
     const [object, setObject] = useState<Group | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -76,8 +101,8 @@ export default function Viewer3D({ model, onUpload }: { model: UploadedModel | n
                 const buffer = await sourceModel.file.arrayBuffer();
                 const occt = await occtimportjs({ locateFile: () => occtWasmUrl });
                 const result = extension === "step" || extension === "stp"
-                    ? occt.ReadStepFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.1 })
-                    : occt.ReadIgesFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.1 });
+                    ? occt.ReadStepFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.02 })
+                    : occt.ReadIgesFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.02 });
                 if (!result.success || result.meshes.length === 0) throw new Error("No renderable geometry was found in this file. Check that it is a valid STEP or IGES solid.");
                 if (!cancelled) setObject(buildModel(result));
             } catch (reason) {
@@ -108,7 +133,7 @@ export default function Viewer3D({ model, onUpload }: { model: UploadedModel | n
                 <button className="rounded px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">Select</button><button className="rounded px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">Measure</button>
             </div>
             <div className="h-full pt-9">
-                {object ? <CadScene object={object} /> : <div className="flex h-full items-center justify-center text-center"><div>
+                {object ? <CadScene object={object} view={view} /> : <div className="flex h-full items-center justify-center text-center"><div>
                     <p className="text-sm text-slate-300">{loading ? "Converting CAD geometry…" : model?.filename ?? "3D workspace"}</p>
                     <p className="mt-1 max-w-sm text-xs text-slate-500">{error ?? (model ? "Preparing 3D preview…" : "Drop a STEP/STP or IGES/IGS file here, or use the upload button above")}</p>
                 </div></div>}

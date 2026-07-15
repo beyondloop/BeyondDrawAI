@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
-import Viewer3D from "../viewer/Viewer3D";
+import Viewer3D, { type CameraView } from "../viewer/Viewer3D";
 import DrawingViewer from "../drawing/DrawingViewer";
 import StatusBar from "./StatusBar";
 import { generateDrawing, uploadCAD } from "../../services/uploadService";
@@ -14,6 +14,7 @@ export default function MainLayout() {
     const [uploading, setUploading] = useState(false);
     const [drawingSvg, setDrawingSvg] = useState<string>();
     const [generatingDrawing, setGeneratingDrawing] = useState(false);
+    const [cameraView, setCameraView] = useState<CameraView>("isometric");
 
     async function handleUpload(file: File) {
         setUploading(true);
@@ -64,12 +65,12 @@ export default function MainLayout() {
             <div className="grid min-h-0 grid-cols-[15.5rem_minmax(0,1fr)] overflow-hidden">
                 <Sidebar />
                 <main className="min-w-0 bg-slate-900 p-3">
-                    <Viewer3D model={model} onUpload={handleUpload} />
+                    <Viewer3D model={model} onUpload={handleUpload} view={cameraView} />
                 </main>
             </div>
 
             <section className="grid min-h-0 grid-cols-[15.5rem_minmax(20rem,1fr)_19rem] border-t border-slate-700 bg-slate-900">
-                <FeatureTree modelName={model?.filename} />
+                <FeatureTree modelName={model?.filename} activeView={cameraView} onSelectView={setCameraView} />
                 <DrawingViewer svg={drawingSvg} generating={generatingDrawing} onGenerate={handleGenerateDrawing} canGenerate={Boolean(model?.id)} />
                 <Properties />
             </section>
@@ -79,13 +80,18 @@ export default function MainLayout() {
     );
 }
 
-function FeatureTree({ modelName }: { modelName?: string }) {
+function FeatureTree({ modelName, activeView, onSelectView }: { modelName?: string; activeView: CameraView; onSelectView: (view: CameraView) => void }) {
+    const planes: Array<{ label: string; view: CameraView }> = [
+        { label: "Top Plane", view: "top" },
+        { label: "Front Plane", view: "front" },
+        { label: "Right Plane", view: "right" },
+    ];
     return <aside className="min-w-0 overflow-auto border-r border-slate-700 bg-slate-900 p-3 text-sm">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Feature Tree</h2>
         <ul className="space-y-1 text-slate-300">
             <li className="rounded bg-sky-500/15 px-2 py-1.5 text-sky-200">▾ {modelName ?? "Part Studio"}</li>
-            <li className="pl-6">▸ Origin</li><li className="pl-6">▸ Top Plane</li>
-            <li className="pl-6">▸ Front Plane</li><li className="pl-6">▸ Right Plane</li>
+            <li className="pl-6"><button type="button" onClick={() => onSelectView("isometric")} className={`w-full rounded px-2 py-1 text-left hover:bg-slate-700 ${activeView === "isometric" ? "bg-sky-500/15 text-sky-200" : ""}`}>▸ Origin</button></li>
+            {planes.map(({ label, view }) => <li key={view} className="pl-6"><button type="button" onClick={() => onSelectView(view)} className={`w-full rounded px-2 py-1 text-left hover:bg-slate-700 ${activeView === view ? "bg-sky-500/15 text-sky-200" : ""}`}>▸ {label}</button></li>)}
         </ul>
     </aside>;
 }
