@@ -1,5 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
+from xml.sax.saxutils import escape
 
 from fastapi import HTTPException, UploadFile
 
@@ -160,7 +161,7 @@ class CADService:
         }
 
     def generate_drawing(self, model_id: str):
-        """Create a portable SVG orthographic drawing for an uploaded model."""
+        """Create front and side orthographic views dimensioned from centre datums."""
         model = self.models.get(model_id)
         if model is None:
             raise HTTPException(status_code=404, detail="The uploaded model is no longer available. Upload it again.")
@@ -171,20 +172,55 @@ class CADService:
 
         width, height, depth = bounds.width, bounds.height, bounds.depth
         largest = max(width, height, depth, 1.0)
-        scale = 190 / largest
+        scale = 180 / largest
         front_w, front_h = max(width * scale, 1), max(height * scale, 1)
-        top_w, top_h = max(width * scale, 1), max(depth * scale, 1)
-        right_w, right_h = max(depth * scale, 1), max(height * scale, 1)
+        side_w, side_h = max(depth * scale, 1), max(height * scale, 1)
 
-        def rect(x, y, w, h, label):
-            return f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="part"/><text x="{x + w / 2:.1f}" y="{y + h + 20:.1f}" text-anchor="middle">{label}</text>'
+        def view(x, y, view_width, view_height, label, horizontal_dimension, horizontal_name):
+            """Draw one view with its centre intersection used as datum A."""
+            cx, cy = x + view_width / 2, y + view_height / 2
+            half_horizontal, half_vertical = horizontal_dimension / 2, height / 2
+            right, bottom = x + view_width, y + view_height
+            return f'''
+<g>
+  <rect x="{x:.1f}" y="{y:.1f}" width="{view_width:.1f}" height="{view_height:.1f}" class="part"/>
+  <path class="centre" d="M{x - 24:.1f} {cy:.1f}H{right + 24:.1f} M{cx:.1f} {y - 24:.1f}V{bottom + 24:.1f}"/>
+  <circle cx="{cx:.1f}" cy="{cy:.1f}" r="3" class="datum-point"/>
+  <path class="leader" d="M{cx + 4:.1f} {cy - 4:.1f}l26 -22h34"/>
+  <text x="{cx + 68:.1f}" y="{cy - 29:.1f}" class="datum-label">DATUM A (CENTRE)</text>
+  <text x="{cx:.1f}" y="{bottom + 45:.1f}" text-anchor="middle" class="view-label">{label} VIEW</text>
 
-        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="800" height="560" viewBox="0 0 800 560">
-<style>.part{{fill:#f8fafc;stroke:#0f172a;stroke-width:2}} text{{font:14px Arial;fill:#0f172a}} .dim{{stroke:#2563eb;stroke-width:1.5;fill:none}} .title{{font:bold 20px Arial}}</style>
-<rect width="800" height="560" fill="white"/><rect x="15" y="15" width="770" height="530" fill="none" stroke="#64748b"/>
-<text x="35" y="50" class="title">{model.filename} — Orthographic Drawing</text>
-{rect(110, 145, front_w, front_h, 'FRONT')}{rect(110, 390, top_w, top_h, 'TOP')}{rect(470, 145, right_w, right_h, 'RIGHT')}
-<path class="dim" d="M110 125h{front_w:.1f}m{-front_w:.1f} -6v12m{front_w:.1f}-12v12"/><text x="{110 + front_w / 2:.1f}" y="118" text-anchor="middle">W {width:.2f} mm</text>
-<path class="dim" d="M{110 + front_w + 20:.1f} 145v{front_h:.1f}m-6 {-front_h:.1f}h12m-12 {front_h:.1f}h12"/><text x="{110 + front_w + 30:.1f}" y="{145 + front_h / 2:.1f}">H {height:.2f} mm</text>
-<text x="35" y="520">Depth: {depth:.2f} mm   Units: {model.units}</text></svg>'''
+  <path class="extension" d="M{x:.1f} {cy:.1f}V{bottom + 8:.1f} M{cx:.1f} {cy:.1f}V{bottom + 8:.1f} M{right:.1f} {cy:.1f}V{bottom + 8:.1f}"/>
+  <path class="dim" marker-start="url(#arrow)" marker-end="url(#arrow)" d="M{x:.1f} {bottom + 18:.1f}H{cx:.1f} M{cx:.1f} {bottom + 18:.1f}H{right:.1f}"/>
+  <text x="{(x + cx) / 2:.1f}" y="{bottom + 14:.1f}" text-anchor="middle" class="dim-label">{half_horizontal:.2f} mm</text>
+  <text x="{(cx + right) / 2:.1f}" y="{bottom + 14:.1f}" text-anchor="middle" class="dim-label">{half_horizontal:.2f} mm</text>
+  <text x="{cx:.1f}" y="{bottom + 67:.1f}" text-anchor="middle" class="overall-label">{horizontal_name}: {horizontal_dimension:.2f} mm</text>
+
+  <path class="extension" d="M{cx:.1f} {y:.1f}H{x - 8:.1f} M{cx:.1f} {cy:.1f}H{x - 8:.1f} M{cx:.1f} {bottom:.1f}H{x - 8:.1f}"/>
+  <path class="dim" marker-start="url(#arrow)" marker-end="url(#arrow)" d="M{x - 18:.1f} {y:.1f}V{cy:.1f} M{x - 18:.1f} {cy:.1f}V{bottom:.1f}"/>
+  <text x="{x - 23:.1f}" y="{(y + cy) / 2:.1f}" text-anchor="end" class="dim-label">{half_vertical:.2f} mm</text>
+  <text x="{x - 23:.1f}" y="{(cy + bottom) / 2:.1f}" text-anchor="end" class="dim-label">{half_vertical:.2f} mm</text>
+  <text x="{x - 28:.1f}" y="{cy + 5:.1f}" text-anchor="end" class="overall-label">H: {height:.2f}</text>
+</g>'''
+
+        safe_filename = escape(model.filename)
+        safe_units = escape(model.units)
+        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500">
+<style>
+  .part{{fill:#f8fafc;stroke:#0f172a;stroke-width:2}}
+  text{{font:12px Arial;fill:#0f172a}}
+  .title{{font:bold 20px Arial}} .view-label{{font:bold 14px Arial}}
+  .centre{{stroke:#64748b;stroke-width:1;stroke-dasharray:10 4 2 4;fill:none}}
+  .datum-point{{fill:#0f172a}} .datum-label{{font:bold 10px Arial;fill:#334155}}
+  .dim,.extension,.leader{{stroke:#2563eb;stroke-width:1.25;fill:none}}
+  .extension{{stroke:#94a3b8;stroke-dasharray:3 3}} .dim-label{{font:bold 11px Arial;fill:#1d4ed8}}
+  .overall-label{{font:10px Arial;fill:#475569}}
+</style>
+<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto"><path d="M7 0L0 3.5L7 7Z" fill="#2563eb"/></marker></defs>
+<rect width="900" height="500" fill="white"/><rect x="15" y="15" width="870" height="470" fill="none" stroke="#64748b"/>
+<text x="35" y="50" class="title">{safe_filename} — Centre Datum Orthographic Drawing</text>
+<text x="35" y="73" class="overall-label">All linear dimensions are measured from datum A at the centre of each view. Units: {safe_units}</text>
+{view(150, 150, front_w, front_h, 'FRONT', width, 'WIDTH')}
+{view(590, 150, side_w, side_h, 'SIDE', depth, 'DEPTH')}
+</svg>'''
         return {"success": True, "filename": f"{Path(model.filename).stem}-drawing.svg", "svg": svg}

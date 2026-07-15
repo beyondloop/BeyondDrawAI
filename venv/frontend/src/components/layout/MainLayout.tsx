@@ -42,7 +42,7 @@ export default function MainLayout() {
             return;
         }
         setGeneratingDrawing(true);
-        setStatus("Generating orthographic SVG drawing…");
+        setStatus("Generating front and side drawing from centre datums…");
         try {
             const drawing = await generateDrawing(model.id);
             setDrawingSvg(drawing.svg);
@@ -51,7 +51,7 @@ export default function MainLayout() {
             const anchor = document.createElement("a");
             anchor.href = url; anchor.download = drawing.filename; anchor.click();
             URL.revokeObjectURL(url);
-            setStatus("Drawing generated and downloaded.");
+            setStatus("Front and side datum drawing generated and downloaded.");
         } catch (error) {
             const detail = error instanceof Error ? error.message : "Drawing generation failed.";
             setStatus(detail);
