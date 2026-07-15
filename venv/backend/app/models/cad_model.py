@@ -1,32 +1,64 @@
-from pydantic import BaseModel
-from typing import List
+from typing import Any
 
 
-class BoundingBox(BaseModel):
-    xmin: float
-    ymin: float
-    zmin: float
+class BoundingBox:
 
-    xmax: float
-    ymax: float
-    zmax: float
+    def __init__(
+        self,
+        xmin=0.0,
+        ymin=0.0,
+        zmin=0.0,
+        xmax=0.0,
+        ymax=0.0,
+        zmax=0.0,
+    ):
+        self.xmin = xmin
+        self.ymin = ymin
+        self.zmin = zmin
 
-    width: float
-    height: float
-    depth: float
+        self.xmax = xmax
+        self.ymax = ymax
+        self.zmax = zmax
+
+    @property
+    def width(self):
+        return self.xmax - self.xmin
+
+    @property
+    def height(self):
+        return self.ymax - self.ymin
+
+    @property
+    def depth(self):
+        return self.zmax - self.zmin
 
 
-class CADModel(BaseModel):
-    filename: str
-    file_type: str
-    units: str = "mm"
+class CADModel:
 
-    volume: float = 0.0
-    surface_area: float = 0.0
+    def __init__(self):
 
-    bounding_box: BoundingBox | None = None
+        self.filename = ""
 
-    solids: int = 0
-    faces: int = 0
-    edges: int = 0
-    vertices: int = 0
+        self.file_type = ""
+
+        self.units = "mm"
+
+        # OpenCascade Shape
+        self.shape: Any = None
+
+        # CadQuery Workplane
+        self.workplane: Any = None
+
+        self.bounding_box = None
+
+        self.volume = 0.0
+
+        self.surface_area = 0.0
+
+        self.solids = 0
+
+        self.faces = 0
+
+        self.edges = 0
+
+        self.vertices = 0

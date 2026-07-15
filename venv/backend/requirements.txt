@@ -6,3 +6,7 @@ opencv-python
 pydantic
 sqlalchemy
 python-dotenv
+cadquery
+
+trimesh
+svgwrite
