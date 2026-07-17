@@ -6,13 +6,91 @@ import occtimportjs from "occt-import-js";
 import occtWasmUrl from "occt-import-js/dist/occt-import-js.wasm?url";
 
 type UploadedModel = { filename: string; file_type: string; file: File };
-export type CameraView = "isometric" | "top" | "front" | "right";
+export type CameraView = "isometric" | "top" | "front" | "bottom" | "right";
+
+/** Build a clean orthographic drawing from the loaded mesh for a feature-tree view. */
+export function buildProjectionSvg(group: Group, filename: string, view: Exclude<CameraView, "isometric">) {
+    const triangles: Array<Array<[number, number]>> = [];
+    const edges = new Map<string, { a: [number, number]; b: [number, number]; normals: Vector3[]; z: number; count: number }>();
+    const points: Array<[number, number]> = [];
+    const projection = {
+        top: { label: "TOP", project: (point: Vector3): [number, number] => [point.x, point.z], direction: new Vector3(0, 1, 0) },
+        // The front and bottom feature-tree views are the inverse of the top view.
+        front: { label: "FRONT", project: (point: Vector3): [number, number] => [point.x, -point.z], direction: new Vector3(0, -1, 0) },
+        bottom: { label: "BOTTOM", project: (point: Vector3): [number, number] => [point.x, -point.z], direction: new Vector3(0, -1, 0) },
+        right: { label: "RIGHT", project: (point: Vector3): [number, number] => [point.y, point.z], direction: new Vector3(1, 0, 0) },
+    }[view];
+    group.updateMatrixWorld(true);
+    group.traverse((child) => {
+        if (!(child instanceof Mesh)) return;
+        const geometry = child.geometry as BufferGeometry;
+        const position = geometry.getAttribute("position");
+        const index = geometry.getIndex();
+        if (!position || !index) return;
+        const worldPoint = (vertexIndex: number) => {
+            return new Vector3().fromBufferAttribute(position, vertexIndex).applyMatrix4(child.matrixWorld);
+        };
+        const project = projection.project;
+        for (let i = 0; i < index.count; i += 3) {
+            const indices = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+            const world = indices.map(worldPoint);
+            const normal = new Vector3().subVectors(world[1], world[0]).cross(new Vector3().subVectors(world[2], world[0])).normalize();
+            const triangle = world.map(project);
+            triangles.push(triangle);
+            points.push(...triangle);
+            for (let side = 0; side < 3; side += 1) {
+                const next = (side + 1) % 3;
+                const key = `${child.uuid}:${Math.min(indices[side], indices[next])}:${Math.max(indices[side], indices[next])}`;
+                const existing = edges.get(key);
+                if (existing) {
+                    existing.normals.push(normal);
+                    existing.z += (world[side].z + world[next].z) / 2;
+                    existing.count += 1;
+                } else {
+                    edges.set(key, { a: triangle[side], b: triangle[next], normals: [normal], z: (world[side].z + world[next].z) / 2, count: 1 });
+                }
+            }
+        }
+    });
+    if (!triangles.length) return undefined;
+    const xs = points.map(([x]) => x), ys = points.map(([, y]) => y);
+    const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
+    const spanX = Math.max(xmax - xmin, 0.001), spanY = Math.max(ymax - ymin, 0.001);
+    const scale = Math.min(760 / spanX, 340 / spanY);
+    const ox = 450 - ((xmin + xmax) / 2) * scale, oy = 250 + ((ymin + ymax) / 2) * scale;
+    // Fill the projected faces without stroking every tessellation triangle.
+    const path = triangles.map((triangle) => {
+        const coords = triangle.map(([x, y]) => `${(x * scale + ox).toFixed(1)},${(oy - y * scale).toFixed(1)}`);
+        return `<polygon points="${coords.join(" ")}"/>`;
+    }).join("");
+    // Keep only silhouettes and sharp machining transitions. The stricter angle
+    // removes the dense tessellation lines produced by smooth CAD surfaces.
+    const edgeMarkup = [...edges.values()].filter((edge) => {
+        if (edge.count === 1) return true;
+        const [first, second] = edge.normals;
+        return Boolean(first && second && first.dot(second) < 0.8);
+    }).map((edge) => {
+        const x1 = (edge.a[0] * scale + ox).toFixed(1), y1 = (oy - edge.a[1] * scale).toFixed(1);
+        const x2 = (edge.b[0] * scale + ox).toFixed(1), y2 = (oy - edge.b[1] * scale).toFixed(1);
+        const hidden = edge.normals.every((normal) => normal.dot(projection.direction) <= 0);
+        return `<path class="feature${hidden ? " hidden" : ""}" d="M${x1} ${y1}L${x2} ${y2}"/>`;
+    }).join("");
+    const title = filename.replace(/[<&>\"']/g, "");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500">
+<style>text{font:12px Arial;fill:#0f172a}.title{font:bold 20px Arial}.part{fill:#dbeafe;fill-opacity:.72;stroke:none}.feature{stroke:#172554;stroke-width:1.5;fill:none}.hidden{stroke:#475569;stroke-dasharray:7 5;stroke-width:1.2}.centre{stroke:#64748b;stroke-dasharray:10 4 2 4;fill:none}</style>
+<rect width="900" height="500" fill="white"/><rect x="15" y="15" width="870" height="470" fill="none" stroke="#64748b"/>
+<text x="35" y="50" class="title">${title} — ${projection.label} View</text><text x="35" y="73">Orthographic projection with hidden and machining feature lines</text>
+<path class="centre" d="M70 250H830 M450 95V425"/><g class="part">${path}</g><g>${edgeMarkup}</g><text x="450" y="455" text-anchor="middle">${projection.label} VIEW</text></svg>`;
+}
 
 function CadScene({ object, view }: { object: Group; view: CameraView }) {
     const cameraPosition: Record<CameraView, [number, number, number]> = {
         isometric: [4, 4, 4],
         top: [0, 6, 0],
-        front: [0, 0, 6],
+        // Front and bottom are the reverse of the top orientation, as requested
+        // for the feature-tree reference views.
+        front: [0, -6, 0],
+        bottom: [0, -6, 0],
         right: [6, 0, 0],
     };
     return (
@@ -71,7 +149,7 @@ function buildModel(result: any): Group {
     return group;
 }
 
-export default function Viewer3D({ model, onUpload, view }: { model: UploadedModel | null; onUpload: (file: File) => void; view: CameraView }) {
+export default function Viewer3D({ model, onUpload, view, onProjection }: { model: UploadedModel | null; onUpload: (file: File) => void; view: CameraView; onProjection?: (svg: string | undefined) => void }) {
     const [object, setObject] = useState<Group | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -81,6 +159,7 @@ export default function Viewer3D({ model, onUpload, view }: { model: UploadedMod
         if (!model) {
             setObject(null);
             setError(null);
+            onProjection?.(undefined);
             return;
         }
 
@@ -104,7 +183,10 @@ export default function Viewer3D({ model, onUpload, view }: { model: UploadedMod
                     ? occt.ReadStepFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.02 })
                     : occt.ReadIgesFile(new Uint8Array(buffer), { linearUnit: "millimeter", linearDeflection: 0.02 });
                 if (!result.success || result.meshes.length === 0) throw new Error("No renderable geometry was found in this file. Check that it is a valid STEP or IGES solid.");
-                if (!cancelled) setObject(buildModel(result));
+                if (!cancelled) {
+                    const nextObject = buildModel(result);
+                    setObject(nextObject);
+                }
             } catch (reason) {
                 if (!cancelled) setError(reason instanceof Error ? reason.message : "The CAD model could not be rendered.");
             } finally {
@@ -115,6 +197,14 @@ export default function Viewer3D({ model, onUpload, view }: { model: UploadedMod
         void loadModel();
         return () => { cancelled = true; };
     }, [model]);
+
+    useEffect(() => {
+        if (!object || !model || view === "isometric") {
+            onProjection?.(undefined);
+            return;
+        }
+        onProjection?.(buildProjectionSvg(object, model.filename, view));
+    }, [object, model, onProjection, view]);
 
     return (
         <section

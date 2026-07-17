@@ -160,8 +160,16 @@ class CADService:
 
         }
 
-    def generate_drawing(self, model_id: str):
+    def generate_drawing(self, model_id: str, output_format: str = "dxf"):
         """Create front and side orthographic views dimensioned from centre datums."""
+        if output_format == "dwg":
+            # DWG is a proprietary binary format. Do not rename DXF content to
+            # .dwg: that creates an invalid drawing. A licensed DWG converter
+            # can be connected here when one is available on the deployment.
+            raise HTTPException(
+                status_code=501,
+                detail="DWG export requires a licensed DWG converter. Please select DXF, which is generated as a native CAD drawing."
+            )
         model = self.models.get(model_id)
         if model is None:
             raise HTTPException(status_code=404, detail="The uploaded model is no longer available. Upload it again.")
@@ -223,4 +231,55 @@ class CADService:
 {view(150, 150, front_w, front_h, 'FRONT', width, 'WIDTH')}
 {view(590, 150, side_w, side_h, 'SIDE', depth, 'DEPTH')}
 </svg>'''
-        return {"success": True, "filename": f"{Path(model.filename).stem}-drawing.svg", "svg": svg}
+        def dxf_pair(code, value):
+            return f"{code}\n{value}\n"
+
+        def dxf_line(x1, y1, x2, y2, layer="OUTLINE"):
+            return "".join((
+                dxf_pair(0, "LINE"), dxf_pair(8, layer),
+                dxf_pair(10, f"{x1:.4f}"), dxf_pair(20, f"{y1:.4f}"), dxf_pair(30, "0"),
+                dxf_pair(11, f"{x2:.4f}"), dxf_pair(21, f"{y2:.4f}"), dxf_pair(31, "0"),
+            ))
+
+        def dxf_rect(x, y, rect_width, rect_height):
+            return "".join((
+                dxf_line(x, y, x + rect_width, y),
+                dxf_line(x + rect_width, y, x + rect_width, y + rect_height),
+                dxf_line(x + rect_width, y + rect_height, x, y + rect_height),
+                dxf_line(x, y + rect_height, x, y),
+                dxf_line(x, y + rect_height / 2, x + rect_width, y + rect_height / 2, "CENTRE"),
+                dxf_line(x + rect_width / 2, y, x + rect_width / 2, y + rect_height, "CENTRE"),
+            ))
+
+        def dxf_text(x, y, value, height=5):
+            clean_value = value.replace("\n", " ")
+            return "".join((
+                dxf_pair(0, "TEXT"), dxf_pair(8, "TEXT"),
+                dxf_pair(10, f"{x:.4f}"), dxf_pair(20, f"{y:.4f}"), dxf_pair(30, "0"),
+                dxf_pair(40, f"{height:.4f}"), dxf_pair(1, clean_value),
+            ))
+
+        # DXF coordinates use the standard Cartesian Y-up convention. This is
+        # a native R12 ASCII DXF that opens directly in CAD applications.
+        dxf_front_x, dxf_front_y = 20, 40
+        dxf_side_x, dxf_side_y = dxf_front_x + front_w + 80, 40
+        dxf_content = "".join((
+            dxf_pair(0, "SECTION"), dxf_pair(2, "HEADER"), dxf_pair(0, "ENDSEC"),
+            dxf_pair(0, "SECTION"), dxf_pair(2, "ENTITIES"),
+            dxf_text(20, 20, f"{model.filename} - ORTHOGRAPHIC DRAWING", 7),
+            dxf_rect(dxf_front_x, dxf_front_y, front_w, front_h),
+            dxf_text(dxf_front_x, dxf_front_y - 12, "FRONT VIEW"),
+            dxf_text(dxf_front_x, dxf_front_y - 20, f"WIDTH: {width:.2f} {model.units}"),
+            dxf_text(dxf_front_x, dxf_front_y - 28, f"HEIGHT: {height:.2f} {model.units}"),
+            dxf_rect(dxf_side_x, dxf_side_y, side_w, side_h),
+            dxf_text(dxf_side_x, dxf_side_y - 12, "SIDE VIEW"),
+            dxf_text(dxf_side_x, dxf_side_y - 20, f"DEPTH: {depth:.2f} {model.units}"),
+            dxf_pair(0, "ENDSEC"), dxf_pair(0, "EOF"),
+        ))
+        return {
+            "success": True,
+            "filename": f"{Path(model.filename).stem}-drawing.dxf",
+            "preview_svg": svg,
+            "content": dxf_content,
+            "media_type": "application/dxf",
+        }

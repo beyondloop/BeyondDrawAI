@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 
 from ..services.cad_service import CADService
 
@@ -37,5 +37,5 @@ async def upload_file(file: UploadFile = File(...)):
 
 
 @router.post("/drawings/{model_id}")
-def generate_drawing(model_id: str):
-    return cad_service.generate_drawing(model_id)
+def generate_drawing(model_id: str, format: str = Query("dxf", pattern="^(dxf|dwg)$")):
+    return cad_service.generate_drawing(model_id, format)

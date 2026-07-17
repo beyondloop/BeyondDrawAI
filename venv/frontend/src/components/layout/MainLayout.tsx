@@ -4,15 +4,26 @@ import Sidebar from "./Sidebar";
 import Viewer3D, { type CameraView } from "../viewer/Viewer3D";
 import DrawingViewer from "../drawing/DrawingViewer";
 import StatusBar from "./StatusBar";
-import { generateDrawing, uploadCAD } from "../../services/uploadService";
+import { uploadCAD } from "../../services/uploadService";
 
 type UploadedModel = { id?: string; filename: string; file_type: string; file: File };
+
+function svgProjectionToDxf(svg: string, title: string) {
+    const pair = (code: number, value: string | number) => `${code}\n${value}\n`;
+    const line = (x1: string, y1: string, x2: string, y2: string, layer: string) => [pair(0, "LINE"), pair(8, layer), pair(10, x1), pair(20, (-Number(y1)).toFixed(3)), pair(30, 0), pair(11, x2), pair(21, (-Number(y2)).toFixed(3)), pair(31, 0)].join("");
+    const entities = [...svg.matchAll(/<path class="(feature(?: hidden)?|centre)" d="M([\d.-]+) ([\d.-]+)L([\d.-]+) ([\d.-]+)"\/>/g)]
+        .map(([, className, x1, y1, x2, y2]) => line(x1, y1, x2, y2, className.includes("hidden") ? "HIDDEN" : className === "centre" ? "CENTRE" : "OUTLINE"))
+        .join("");
+    const text = title.replace(/[\r\n]/g, " ");
+    return [pair(0, "SECTION"), pair(2, "HEADER"), pair(0, "ENDSEC"), pair(0, "SECTION"), pair(2, "ENTITIES"), pair(0, "TEXT"), pair(8, "TEXT"), pair(10, 25), pair(20, -30), pair(30, 0), pair(40, 12), pair(1, text), entities, pair(0, "ENDSEC"), pair(0, "EOF")].join("");
+}
 
 export default function MainLayout() {
     const [model, setModel] = useState<UploadedModel | null>(null);
     const [status, setStatus] = useState("Ready");
     const [uploading, setUploading] = useState(false);
-    const [drawingSvg, setDrawingSvg] = useState<string>();
+    const [projectionSvg, setProjectionSvg] = useState<string>();
+    const [drawingFormat, setDrawingFormat] = useState<"dxf" | "dwg" | "svg">("dxf");
     const [generatingDrawing, setGeneratingDrawing] = useState(false);
     const [cameraView, setCameraView] = useState<CameraView>("isometric");
 
@@ -22,7 +33,8 @@ export default function MainLayout() {
         // Keep the local file in state first: the 3D viewer must not depend on the API
         // being online before it can display a STEP/IGES model.
         setModel({ filename: file.name, file_type: fileType, file });
-        setDrawingSvg(undefined);
+        setProjectionSvg(undefined);
+        setCameraView("top");
         setStatus(`Loading ${file.name} in the 3D workspace…`);
         try {
             const response = await uploadCAD(file);
@@ -37,21 +49,25 @@ export default function MainLayout() {
     }
 
     async function handleGenerateDrawing() {
-        if (!model?.id) {
-            setStatus("Wait for the model upload to finish before generating a drawing.");
+        if (!model || !projectionSvg || cameraView === "isometric") {
+            setStatus("Select Top, Front, Bottom, or Right Plane after the model preview has loaded.");
             return;
         }
+        const currentModel = model;
         setGeneratingDrawing(true);
-        setStatus("Generating front and side drawing from centre datums…");
+        setStatus(`Generating ${drawingFormat.toUpperCase()} ${cameraView} drawing from the loaded 3D mesh…`);
         try {
-            const drawing = await generateDrawing(model.id);
-            setDrawingSvg(drawing.svg);
-            const blob = new Blob([drawing.svg], { type: "image/svg+xml" });
+            if (drawingFormat === "dwg") {
+                throw new Error("DWG is a proprietary binary format and needs a licensed DWG converter. Select DXF for a native CAD drawing with the same geometry.");
+            }
+            const isSvg = drawingFormat === "svg";
+            const content = isSvg ? projectionSvg : svgProjectionToDxf(projectionSvg, `${currentModel.filename} - ${cameraView.toUpperCase()} VIEW`);
+            const blob = new Blob([content], { type: isSvg ? "image/svg+xml" : "application/dxf" });
             const url = URL.createObjectURL(blob);
             const anchor = document.createElement("a");
-            anchor.href = url; anchor.download = drawing.filename; anchor.click();
+            anchor.href = url; anchor.download = `${currentModel.filename.replace(/\.[^.]+$/, "")}-${cameraView}-view.${drawingFormat}`; anchor.click();
             URL.revokeObjectURL(url);
-            setStatus("Front and side datum drawing generated and downloaded.");
+            setStatus(`${drawingFormat.toUpperCase()} drawing generated and downloaded.`);
         } catch (error) {
             const detail = error instanceof Error ? error.message : "Drawing generation failed.";
             setStatus(detail);
@@ -65,13 +81,13 @@ export default function MainLayout() {
             <div className="grid min-h-0 grid-cols-[15.5rem_minmax(0,1fr)] overflow-hidden">
                 <Sidebar />
                 <main className="min-w-0 bg-slate-900 p-3">
-                    <Viewer3D model={model} onUpload={handleUpload} view={cameraView} />
+                <Viewer3D model={model} onUpload={handleUpload} view={cameraView} onProjection={setProjectionSvg} />
                 </main>
             </div>
 
             <section className="grid min-h-0 grid-cols-[15.5rem_minmax(20rem,1fr)_19rem] border-t border-slate-700 bg-slate-900">
                 <FeatureTree modelName={model?.filename} activeView={cameraView} onSelectView={setCameraView} />
-                <DrawingViewer svg={drawingSvg} generating={generatingDrawing} onGenerate={handleGenerateDrawing} canGenerate={Boolean(model?.id)} />
+                <DrawingViewer svg={projectionSvg} generating={generatingDrawing} format={drawingFormat} onFormatChange={setDrawingFormat} onGenerate={handleGenerateDrawing} canGenerate={Boolean(model && projectionSvg && cameraView !== "isometric")} />
                 <Properties />
             </section>
 
@@ -84,6 +100,7 @@ function FeatureTree({ modelName, activeView, onSelectView }: { modelName?: stri
     const planes: Array<{ label: string; view: CameraView }> = [
         { label: "Top Plane", view: "top" },
         { label: "Front Plane", view: "front" },
+        { label: "Bottom Plane", view: "bottom" },
         { label: "Right Plane", view: "right" },
     ];
     return <aside className="min-w-0 overflow-auto border-r border-slate-700 bg-slate-900 p-3 text-sm">
