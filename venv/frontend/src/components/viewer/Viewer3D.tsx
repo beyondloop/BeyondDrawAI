@@ -16,7 +16,7 @@ export function buildProjectionSvg(group: Group, filename: string, view: Exclude
     const projection = {
         // These axes exactly match each camera's on-screen right/up directions.
         top: { label: "TOP", project: (point: Vector3): [number, number] => [-point.x, point.z], direction: new Vector3(0, 1, 0) },
-        front: { label: "FRONT", project: (point: Vector3): [number, number] => [point.x, point.z], direction: new Vector3(0, -1, 0) },
+        front: { label: "FRONT", project: (point: Vector3): [number, number] => [point.x, point.y], direction: new Vector3(0, 0, 1) },
         bottom: { label: "BOTTOM", project: (point: Vector3): [number, number] => [point.x, point.z], direction: new Vector3(0, -1, 0) },
         right: { label: "RIGHT", project: (point: Vector3): [number, number] => [point.y, point.z], direction: new Vector3(1, 0, 0) },
     }[view];
@@ -89,13 +89,13 @@ function CameraOrientation({ view }: { view: CameraView }) {
         const cameraPosition: Record<CameraView, [number, number, number]> = {
         isometric: [4, 4, 4],
         top: [0, 6, 0],
-        front: [0, -6, 0],
+        front: [0, 0, 6],
         bottom: [0, -6, 0],
         right: [6, 0, 0],
         };
         camera.position.set(...cameraPosition[view]);
         camera.up.set(0, 0, 1);
-        if (view === "isometric") camera.up.set(0, 1, 0);
+        if (view === "front" || view === "isometric") camera.up.set(0, 1, 0);
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
     }, [camera, view]);
