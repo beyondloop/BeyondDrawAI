@@ -58,6 +58,30 @@ export function buildProjectionSvg(group: Group, filename: string, view: Exclude
     const spanX = Math.max(xmax - xmin, 0.001), spanY = Math.max(ymax - ymin, 0.001);
     const scale = Math.min(760 / spanX, 340 / spanY);
     const ox = 450 - ((xmin + xmax) / 2) * scale, oy = 250 + ((ymin + ymax) / 2) * scale;
+    // The preview group is fitted to the viewer.  Convert its projected values
+    // back to the imported model's millimetres before placing dimension text.
+    const modelScale = Number(group.userData.modelScale) || 1;
+    const modelUnitsPerProjectionUnit = 1 / modelScale;
+    const centreX = (xmin + xmax) / 2, centreY = (ymin + ymax) / 2;
+    const toScreen = ([x, y]: [number, number]) => [x * scale + ox, oy - y * scale] as const;
+    const [left, top] = toScreen([xmin, ymax]);
+    const [right, bottom] = toScreen([xmax, ymin]);
+    const [centreScreenX, centreScreenY] = toScreen([centreX, centreY]);
+    const horizontalHalf = (spanX / 2) * modelUnitsPerProjectionUnit;
+    const verticalHalf = (spanY / 2) * modelUnitsPerProjectionUnit;
+    // These are baseline (ordinate) dimensions: both directions originate at
+    // the centre datum, instead of being chained from one feature to another.
+    const dimensions = `
+<g class="dimensions">
+  <path class="extension" d="M${left.toFixed(1)} ${centreScreenY.toFixed(1)}V${(bottom + 8).toFixed(1)} M${centreScreenX.toFixed(1)} ${centreScreenY.toFixed(1)}V${(bottom + 8).toFixed(1)} M${right.toFixed(1)} ${centreScreenY.toFixed(1)}V${(bottom + 8).toFixed(1)}"/>
+  <path class="linear-dim" d="M${left.toFixed(1)} ${(bottom + 18).toFixed(1)}L${centreScreenX.toFixed(1)} ${(bottom + 18).toFixed(1)}"/><path class="linear-dim" d="M${centreScreenX.toFixed(1)} ${(bottom + 18).toFixed(1)}L${right.toFixed(1)} ${(bottom + 18).toFixed(1)}"/>
+  <text x="${((left + centreScreenX) / 2).toFixed(1)}" y="${(bottom + 14).toFixed(1)}" text-anchor="middle" class="dim-label">X− ${horizontalHalf.toFixed(2)} mm</text>
+  <text x="${((centreScreenX + right) / 2).toFixed(1)}" y="${(bottom + 14).toFixed(1)}" text-anchor="middle" class="dim-label">X+ ${horizontalHalf.toFixed(2)} mm</text>
+  <path class="extension" d="M${centreScreenX.toFixed(1)} ${top.toFixed(1)}H${(left - 8).toFixed(1)} M${centreScreenX.toFixed(1)} ${centreScreenY.toFixed(1)}H${(left - 8).toFixed(1)} M${centreScreenX.toFixed(1)} ${bottom.toFixed(1)}H${(left - 8).toFixed(1)}"/>
+  <path class="linear-dim" d="M${(left - 18).toFixed(1)} ${top.toFixed(1)}L${(left - 18).toFixed(1)} ${centreScreenY.toFixed(1)}"/><path class="linear-dim" d="M${(left - 18).toFixed(1)} ${centreScreenY.toFixed(1)}L${(left - 18).toFixed(1)} ${bottom.toFixed(1)}"/>
+  <text x="${(left - 23).toFixed(1)}" y="${((top + centreScreenY) / 2).toFixed(1)}" text-anchor="end" class="dim-label">Y+ ${verticalHalf.toFixed(2)} mm</text>
+  <text x="${(left - 23).toFixed(1)}" y="${((centreScreenY + bottom) / 2).toFixed(1)}" text-anchor="end" class="dim-label">Y− ${verticalHalf.toFixed(2)} mm</text>
+</g>`;
     // Fill the projected faces without stroking every tessellation triangle.
     const path = triangles.map((triangle) => {
         const coords = triangle.map(([x, y]) => `${(x * scale + ox).toFixed(1)},${(oy - y * scale).toFixed(1)}`);
@@ -77,10 +101,11 @@ export function buildProjectionSvg(group: Group, filename: string, view: Exclude
     }).join("");
     const title = filename.replace(/[<&>\"']/g, "");
     return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500">
-<style>text{font:12px Arial;fill:#0f172a}.title{font:bold 20px Arial}.part{fill:#dbeafe;fill-opacity:.72;stroke:none}.feature{stroke:#172554;stroke-width:1.5;fill:none}.hidden{stroke:#475569;stroke-dasharray:7 5;stroke-width:1.2}.centre{stroke:#64748b;stroke-dasharray:10 4 2 4;fill:none}</style>
+<style>text{font:12px Arial;fill:#0f172a}.title{font:bold 20px Arial}.part{fill:#dbeafe;fill-opacity:.72;stroke:none}.feature{stroke:#172554;stroke-width:1.5;fill:none}.hidden{stroke:#475569;stroke-dasharray:7 5;stroke-width:1.2}.centre{stroke:#64748b;stroke-dasharray:10 4 2 4;fill:none}.linear-dim{stroke:#2563eb;stroke-width:1.2;fill:none}.extension{stroke:#94a3b8;stroke-dasharray:3 3;fill:none}.dim-label{font:bold 11px Arial;fill:#1d4ed8}</style>
 <rect width="900" height="500" fill="white"/><rect x="15" y="15" width="870" height="470" fill="none" stroke="#64748b"/>
 <text x="35" y="50" class="title">${title} — ${projection.label} View</text><text x="35" y="73">Orthographic projection with hidden and machining feature lines</text>
-<path class="centre" d="M70 250H830 M450 95V425"/><g class="part">${path}</g><g>${edgeMarkup}</g><text x="450" y="455" text-anchor="middle">${projection.label} VIEW</text></svg>`;
+<text x="35" y="91" class="dim-label">DATUM A: view centre — baseline dimensions are measured from this centreline</text>
+<path class="centre" d="M70 ${centreScreenY.toFixed(1)}H830 M${centreScreenX.toFixed(1)} 95V425"/><g class="part">${path}</g><g>${edgeMarkup}</g>${dimensions}<circle cx="${centreScreenX.toFixed(1)}" cy="${centreScreenY.toFixed(1)}" r="3" fill="#0f172a"/><text x="450" y="455" text-anchor="middle">${projection.label} VIEW</text></svg>`;
 }
 
 function CameraOrientation({ view }: { view: CameraView }) {
@@ -157,6 +182,7 @@ function buildModel(result: any): Group {
     const scale = largestDimension > 0 ? 3 / largestDimension : 1;
     group.scale.setScalar(scale);
     group.position.copy(center).multiplyScalar(-scale);
+    group.userData.modelScale = scale;
     return group;
 }
 

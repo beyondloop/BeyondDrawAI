@@ -11,11 +11,18 @@ type UploadedModel = { id?: string; filename: string; file_type: string; file: F
 function svgProjectionToDxf(svg: string, title: string) {
     const pair = (code: number, value: string | number) => `${code}\n${value}\n`;
     const line = (x1: string, y1: string, x2: string, y2: string, layer: string) => [pair(0, "LINE"), pair(8, layer), pair(10, x1), pair(20, (-Number(y1)).toFixed(3)), pair(30, 0), pair(11, x2), pair(21, (-Number(y2)).toFixed(3)), pair(31, 0)].join("");
-    const entities = [...svg.matchAll(/<path class="(feature(?: hidden)?|centre)" d="M([\d.-]+) ([\d.-]+)L([\d.-]+) ([\d.-]+)"\/>/g)]
-        .map(([, className, x1, y1, x2, y2]) => line(x1, y1, x2, y2, className.includes("hidden") ? "HIDDEN" : className === "centre" ? "CENTRE" : "OUTLINE"))
+    const entities = [...svg.matchAll(/<path class="(feature(?: hidden)?|centre|linear-dim)" d="M([\d.-]+) ([\d.-]+)L([\d.-]+) ([\d.-]+)"\/>/g)]
+        .map(([, className, x1, y1, x2, y2]) => line(x1, y1, x2, y2, className.includes("hidden") ? "HIDDEN" : className === "centre" ? "CENTRE" : className === "linear-dim" ? "DIMENSION" : "OUTLINE"))
         .join("");
+    const dimensionText = [...svg.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)]
+        .map(([, attributes, value]) => {
+            if (!/class="dim-label"/.test(attributes)) return "";
+            const x = attributes.match(/\bx="([\d.-]+)"/)?.[1];
+            const y = attributes.match(/\by="([\d.-]+)"/)?.[1];
+            return x && y ? [pair(0, "TEXT"), pair(8, "DIMENSION"), pair(10, x), pair(20, (-Number(y)).toFixed(3)), pair(30, 0), pair(40, 8), pair(1, value)].join("") : "";
+        }).join("");
     const text = title.replace(/[\r\n]/g, " ");
-    return [pair(0, "SECTION"), pair(2, "HEADER"), pair(0, "ENDSEC"), pair(0, "SECTION"), pair(2, "ENTITIES"), pair(0, "TEXT"), pair(8, "TEXT"), pair(10, 25), pair(20, -30), pair(30, 0), pair(40, 12), pair(1, text), entities, pair(0, "ENDSEC"), pair(0, "EOF")].join("");
+    return [pair(0, "SECTION"), pair(2, "HEADER"), pair(0, "ENDSEC"), pair(0, "SECTION"), pair(2, "ENTITIES"), pair(0, "TEXT"), pair(8, "TEXT"), pair(10, 25), pair(20, -30), pair(30, 0), pair(40, 12), pair(1, text), entities, dimensionText, pair(0, "ENDSEC"), pair(0, "EOF")].join("");
 }
 
 export default function MainLayout() {
