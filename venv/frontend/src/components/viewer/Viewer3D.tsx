@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { TrackballControls } from "@react-three/drei";
 import { Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, MeshStandardMaterial, SRGBColorSpace, Vector3 } from "three";
 import occtimportjs from "occt-import-js";
@@ -14,10 +14,10 @@ export function buildProjectionSvg(group: Group, filename: string, view: Exclude
     const edges = new Map<string, { a: [number, number]; b: [number, number]; normals: Vector3[]; z: number; count: number }>();
     const points: Array<[number, number]> = [];
     const projection = {
-        top: { label: "TOP", project: (point: Vector3): [number, number] => [point.x, point.z], direction: new Vector3(0, 1, 0) },
-        // The front and bottom feature-tree views are the inverse of the top view.
-        front: { label: "FRONT", project: (point: Vector3): [number, number] => [point.x, -point.z], direction: new Vector3(0, -1, 0) },
-        bottom: { label: "BOTTOM", project: (point: Vector3): [number, number] => [point.x, -point.z], direction: new Vector3(0, -1, 0) },
+        // These axes exactly match each camera's on-screen right/up directions.
+        top: { label: "TOP", project: (point: Vector3): [number, number] => [-point.x, point.z], direction: new Vector3(0, 1, 0) },
+        front: { label: "FRONT", project: (point: Vector3): [number, number] => [point.x, point.z], direction: new Vector3(0, -1, 0) },
+        bottom: { label: "BOTTOM", project: (point: Vector3): [number, number] => [point.x, point.z], direction: new Vector3(0, -1, 0) },
         right: { label: "RIGHT", project: (point: Vector3): [number, number] => [point.y, point.z], direction: new Vector3(1, 0, 0) },
     }[view];
     group.updateMatrixWorld(true);
@@ -83,18 +83,29 @@ export function buildProjectionSvg(group: Group, filename: string, view: Exclude
 <path class="centre" d="M70 250H830 M450 95V425"/><g class="part">${path}</g><g>${edgeMarkup}</g><text x="450" y="455" text-anchor="middle">${projection.label} VIEW</text></svg>`;
 }
 
-function CadScene({ object, view }: { object: Group; view: CameraView }) {
-    const cameraPosition: Record<CameraView, [number, number, number]> = {
+function CameraOrientation({ view }: { view: CameraView }) {
+    const { camera } = useThree();
+    useEffect(() => {
+        const cameraPosition: Record<CameraView, [number, number, number]> = {
         isometric: [4, 4, 4],
         top: [0, 6, 0],
-        // Front and bottom are the reverse of the top orientation, as requested
-        // for the feature-tree reference views.
         front: [0, -6, 0],
         bottom: [0, -6, 0],
         right: [6, 0, 0],
-    };
+        };
+        camera.position.set(...cameraPosition[view]);
+        camera.up.set(0, 0, 1);
+        if (view === "isometric") camera.up.set(0, 1, 0);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+    }, [camera, view]);
+    return null;
+}
+
+function CadScene({ object, view }: { object: Group; view: CameraView }) {
     return (
-        <Canvas key={view} camera={{ position: cameraPosition[view], fov: 40 }} dpr={[1, 2]}>
+        <Canvas key={view} camera={{ fov: 40 }} dpr={[1, 2]}>
+            <CameraOrientation view={view} />
             <color attach="background" args={["#172033"]} />
             <ambientLight intensity={0.75} />
             <directionalLight position={[5, 8, 5]} intensity={1.8} />
